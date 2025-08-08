@@ -3,12 +3,11 @@ package behavioral.observer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
 
 public class NotificationHandler {
     private static final Logger log = LoggerFactory.getLogger(NotificationHandler.class);
@@ -69,45 +68,67 @@ public class NotificationHandler {
      * or argument mismatches) are caught and logged as errors.
      * </p>
      *
-     * @param channelName The name of the channel to send the message to.
+     * @param channelName  The name of the channel to send the message to.
      * @param functionName The name of the method to be invoked on each subscribed object.
-     * @param args A variable-length argument list (varargs) representing the
-     * arguments to be passed to the invoked method. The runtime types
-     * of these arguments are used to infer the method's signature.
+     * @param args         A variable-length argument list (varargs) representing the
+     *                     arguments to be passed to the invoked method. The runtime types
+     *                     of these arguments are used to infer the method's signature.
      */
     public static void send(String channelName, String functionName, Object... args) {
         if (!channels.containsKey(channelName)) {
             log.warn("Channel {} doesn't exist", channelName);
         }
         for (Object lobj : channels.get(channelName)) {
-            sendWithWrapperTypes(lobj, functionName, args);
-        }
-    }
-
-    private static void sendWithWrapperTypes(Object lobj, String functionName, Object... args) {
-        try {
             List<Class<?>> types = new ArrayList<>();
             for (Object o : args) {
                 types.add(o.getClass());
             }
-            Method method = lobj.getClass().getDeclaredMethod(functionName, types.toArray(new Class<?>[0]));
-            method.invoke(lobj, args);
-        } catch (Exception fault) {
-            sendWithBasicTypes(lobj, functionName, args);
+            sendWithWrapperTypes(lobj, functionName, types, args);
         }
     }
 
-    private static void sendWithBasicTypes(Object lobj, String functionName, Object... args) {
+    private static void sendWithWrapperTypes(Object lobj, String functionName, List<Class<?>> types, Object... args) {
         try {
-            List<Class<?>> types = new ArrayList<>();
-            for (Object o : args) {
-                types.add(toBasicType(o.getClass()));
-            }
             Method method = lobj.getClass().getDeclaredMethod(functionName, types.toArray(new Class<?>[0]));
             method.invoke(lobj, args);
-        } catch (NoSuchMethodException fault) {
+        } catch (Exception fault) {
+            sendWithBasicTypes(lobj, functionName, types, args);
+        }
+    }
+
+    private static void sendWithBasicTypes(Object lobj, String functionName, List<Class<?>> types, Object... args) {
+        try {
+            List<Class<?>> basicTypes = new ArrayList<>();
+            for (var t : types) {
+                basicTypes.add(toBasicType(t));
+            }
+            Method method = lobj.getClass().getDeclaredMethod(functionName, basicTypes.toArray(new Class<?>[0]));
+            method.invoke(lobj, args);
+        } catch (Exception fault) {
+            sendWithCastParameters(lobj, functionName, types, args);
+        }
+    }
+
+    private static void sendWithCastParameters(Object lobj, String functionName, List<Class<?>> types, Object... args) {
+        try {
+            for (var method : lobj.getClass().getDeclaredMethods()) {
+                try {
+                    if (method.getParameters().length == args.length) {
+                        List<Object> castedArgs = new ArrayList<>();
+                        for (int x = 0; x < method.getParameterTypes().length; ++x) {
+                            castedArgs.add(method.getParameterTypes()[x].cast(args[x]));
+                        }
+                        method.setAccessible(true);
+                        method.invoke(lobj, castedArgs.toArray());
+                        method.setAccessible(false);
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.info(e.toString());
+                }
+            }
+        } catch (Exception e) {
             log.warn("The object {} doesn't contain method {}", lobj, functionName);
-        } catch (InvocationTargetException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
     }
@@ -116,4 +137,5 @@ public class NotificationHandler {
         return WRAPPER_TO_PRIMITIVE_MAP.getOrDefault(clazz, clazz);
     }
 }
+
 
